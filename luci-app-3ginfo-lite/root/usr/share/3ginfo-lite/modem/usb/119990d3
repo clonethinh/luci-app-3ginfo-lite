@@ -1,18 +1,33 @@
 # Sierra Wireless EM9190
-# Phiên bản TỐI ƯU & TƯƠNG THÍCH - Sửa lỗi "declare not found" cho OpenWrt/ash
+# Phiên bản HOÀN CHỈNH - Sửa lỗi nhiệt độ, băng tần và model/firmware
 
-# --- LẤY TẤT CẢ DỮ LIỆU TRONG MỘT LẦN ---
+# --- GỌI MODEM MỘT LẦN DUY NHẤT ---
 ALL_COMMANDS="at!gstatus?;+CGMM;+CGMR"
 O=$(sms_tool -d "$DEVICE" at "$ALL_COMMANDS")
 
-# --- XỬ LÝ DỮ LIỆU ĐÃ LẤY ---
-# Dùng awk để trích xuất tất cả các giá trị cần thiết
+# --- XỬ LÝ DỮ LIỆU BẰNG AWK ĐÃ TINH CHỈNH ---
 eval $(echo "$O" | awk '
-/^\!GSTATUS:/ { in_gstatus=1; next }
-/^\+CGMM:/  { gsub(/\r/, ""); print "MODEL=\"" substr($0, 8) "\""; next }
-/^\+CGMR:/  { gsub(/\r/, ""); print "FW=\"" substr($0, 8) "\""; next }
-in_gstatus {
-    if (/Temperature:/) { print "TEMP=" $3 }
+# Xử lý Model. Xóa tiền tố "+CGMM: " và ký tự \r
+/^\+CGMM:/ {
+    gsub(/\+CGMM:[[:space:]]+|\r/, "");
+    print "MODEL=\"" $0 "\"";
+    next;
+}
+
+# Xử lý Firmware. Xóa tiền tố "+CGMR: " và ký tự \r
+/^\+CGMR:/ {
+    gsub(/\+CGMR:[[:space:]]+|\r/, "");
+    print "FW=\"" $0 "\"";
+    next;
+}
+
+# Xử lý khối dữ liệu từ !gstatus?
+{
+    # Đặt Field Separator (FS) để xử lý nhiều khoảng trắng
+    FS = "[[:space:]]+";
+    $0 = $0; # Rebuild the line with the new FS
+
+    if (/^Current Temperature:/) { print "TEMP=" $3 }
     if (/^System mode:/) { print "SYS_MODE=\"" $3 "\"" }
     if (/TAC:/) { print "T_HEX=" $6 }
     if (/^PCC.*RSSI/) { print "RSSI=" $4 }
@@ -20,9 +35,12 @@ in_gstatus {
     if (/^RSRQ/) { print "RSRQ=" $3 }
     if (/^SINR/) { print "SINR=" $3 }
     if (/^LTE band:/) { print "PCC_BAND=" $3; print "PCC_BW=" $6 }
-    if (/^LTE SCC1 state:.*ACTIVE/) { print "SCC1_BAND=" $3 }
-    if (/^LTE SCC2 state:.*ACTIVE/) { print "SCC2_BAND=" $3 }
-    if (/^LTE SCC3 state:.*ACTIVE/) { print "SCC3_BAND=" $3 }
+    
+    # Sửa lỗi lấy sai trường. Bây giờ sẽ lấy trường thứ 4 (tên band) thay vì trường 3 (chữ "state:")
+    if (/^LTE SCC1 state:.*ACTIVE/) { print "SCC1_BAND=" $4 }
+    if (/^LTE SCC2 state:.*ACTIVE/) { print "SCC2_BAND=" $4 }
+    if (/^LTE SCC3 state:.*ACTIVE/) { print "SCC3_BAND=" $4 }
+
     if (/^SCC. NR5G band:/ && $4 != "---") { print "NR_BAND=" $4 }
     if (/^SCC.*NR5G RSRP:/) { print "NR_RSRP=" $4 }
     if (/^SCC.*NR5G RSRQ:/) { print "NR_RSRQ=" $4 }
@@ -48,7 +66,7 @@ fi
 [ -n "$NR_RSRQ" ] && RSRQ=$NR_RSRQ
 [ -n "$NR_SINR" ] && SINR=$NR_SINR
 
-# Xử lý băng tần bằng cách ghép chuỗi (thay cho mảng)
+# Xử lý băng tần bằng cách ghép chuỗi
 CA_BANDS_STR=""
 if [ -n "$PCC_BAND" ]; then
     band_name=$(band4g "${PCC_BAND/B/}")
@@ -56,19 +74,16 @@ if [ -n "$PCC_BAND" ]; then
     MODE="$MODE $band_name"
 fi
 
-# Ghép chuỗi các băng tần phụ (CA)
 [ -n "$SCC1_BAND" ] && CA_BANDS_STR="$CA_BANDS_STR + $(band4g "${SCC1_BAND/B/}")"
 [ -n "$SCC2_BAND" ] && CA_BANDS_STR="$CA_BANDS_STR + $(band4g "${SCC2_BAND/B/}")"
 [ -n "$SCC3_BAND" ] && CA_BANDS_STR="$CA_BANDS_STR + $(band4g "${SCC3_BAND/B/}")"
 [ -n "$NR_BAND" ] && CA_BANDS_STR="$CA_BANDS_STR + $(band5g "${NR_BAND/n/}")"
 
-# Nếu có băng tần phụ, cập nhật MODE
 if [ -n "$CA_BANDS_STR" ]; then
     MODE=${MODE/LTE/LTE-A}
     MODE="$MODE$CA_BANDS_STR"
 fi
 
-# Chuẩn hóa lại chuỗi MODE cho đẹp
 MODE=$(echo "$MODE" | sed 's/LTE-A/LTE-A |/')
 
 # Xác định giao thức modem
