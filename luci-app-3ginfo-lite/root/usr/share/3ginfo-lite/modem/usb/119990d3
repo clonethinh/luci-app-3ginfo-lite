@@ -26,15 +26,25 @@ if [ -n "$T" ]; then
     T_HEX="$T"
 fi
 
-# Xử lý các thông số tín hiệu chính (mặc định là của LTE)
-T=$(echo "$O" | awk '/^PCC.*RSSI/ {print $4}' | xargs)
-[ -n "$T" ] && RSSI="${T// /}"
-T=$(echo "$O" | awk '/^PCC.*RSRP/ {print $8}' | xargs)
-[ -n "$T" ] && RSRP="${T// /}"
-T=$(echo "$O" | awk '/^RSRQ/ {print $3}')
-[ -n "$T" ] && RSRQ="$T"
-T=$(echo "$O" | awk '/^SINR/ {print $3}')
-[ -n "$T" ] && SINR="$T"
+# --- XỬ LÝ TÍN HIỆU (PHIÊN BẢN ĐÃ SỬA LỖI & CHÍNH XÁC) ---
+
+# RSSI: Lấy giá trị của antenna chính (PCC RxM RSSI) và dọn dẹp
+T=$(echo "$O" | awk -F: '/PCC RxM RSSI/ {print $2; exit}')
+[ -n "$T" ] && RSSI=$(echo "$T" | tr -d ',' | xargs)
+
+# RSRP: Lấy giá trị của antenna chính (PCC RxM RSRP) và dọn dẹp
+T=$(echo "$O" | awk -F: '/PCC RxM RSRP/ {print $2; exit}')
+[ -n "$T" ] && RSRP=$(echo "$T" | tr -d ',' | xargs)
+
+# RSRQ: Tìm dòng chứa "PCC RSRQ" và lấy giá trị
+T=$(echo "$O" | awk -F: '/PCC RSRQ/ {print $2}')
+[ -n "$T" ] && RSRQ=$(echo "$T" | xargs)
+
+# SINR: Tìm dòng chứa "PCC SINR" và lấy giá trị
+T=$(echo "$O" | awk -F: '/PCC SINR/ {print $2}')
+[ -n "$T" ] && SINR=$(echo "$T" | xargs)
+
+# --- KẾT THÚC KHỐI XỬ LÝ TÍN HIỆU ---
 
 # Xử lý băng tần LTE
 T=$(echo "$O" | awk '/^LTE band:/ {print $3}')
@@ -92,17 +102,17 @@ if [ -n "$T" ] && [ "$T" != "---" ]; then
     # Nếu tìm thấy, sẽ GHI ĐÈ lên các giá trị của LTE đã lấy ở trên.
     # Điều này đảm bảo giao diện luôn hiển thị thông số quan trọng nhất.
     
-    # Lấy NR5G RSRP (thường ở cột 4)
-    T_NR_RSRP=$(echo "$O" | awk '/SCC. NR5G RSRP:/ {print $4}')
-    [ -n "$T_NR_RSRP" ] && RSRP="$T_NR_RSRP"
+    # Lấy NR5G RSRP
+    T_NR_RSRP=$(echo "$O" | awk -F: '/SCC. NR5G RSRP/ {print $2}')
+    [ -n "$T_NR_RSRP" ] && RSRP=$(echo "$T_NR_RSRP" | xargs)
     
-    # Lấy NR5G RSRQ (thường ở cột 4)
-    T_NR_RSRQ=$(echo "$O" | awk '/SCC. NR5G RSRQ:/ {print $4}')
-    [ -n "$T_NR_RSRQ" ] && RSRQ="$T_NR_RSRQ"
+    # Lấy NR5G RSRQ
+    T_NR_RSRQ=$(echo "$O" | awk -F: '/SCC. NR5G RSRQ/ {print $2}')
+    [ -n "$T_NR_RSRQ" ] && RSRQ=$(echo "$T_NR_RSRQ" | xargs)
     
-    # Lấy NR5G SINR (thường ở cột 4)
-    T_NR_SINR=$(echo "$O" | awk '/SCC. NR5G SINR:/ {print $4}')
-    [ -n "$T_NR_SINR" ] && SINR="$T_NR_SINR"
+    # Lấy NR5G SINR
+    T_NR_SINR=$(echo "$O" | awk -F: '/SCC. NR5G SINR/ {print $2}')
+    [ -n "$T_NR_SINR" ] && SINR=$(echo "$T_NR_SINR" | xargs)
     
 fi
 
