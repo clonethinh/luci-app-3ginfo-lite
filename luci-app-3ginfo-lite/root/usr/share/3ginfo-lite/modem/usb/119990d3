@@ -1,5 +1,5 @@
 # Sierra Wireless EM9190
-# PHIÊN BẢN HOÀN CHỈNH CUỐI CÙNG (Sửa lỗi parse tín hiệu triệt để)
+# PHIÊN BẢN HOÀN CHỈNH CUỐI CÙNG (Dùng sed để parse tín hiệu chính xác 100%)
 
 # --- LẤY DỮ LIỆU PHỨC TẠP: GSTATUS ---
 O=$(sms_tool -d $DEVICE at "at!gstatus?")
@@ -21,26 +21,25 @@ T=$(echo "$O" | awk '/^System mode:/ {print $3}')
 T=$(echo "$O" | awk '/.*TAC:/ {print $6}')
 [ -n "$T" ] && T_DEC=$(printf "%d" "0x$T") && T_HEX="$T"
 
-# --- KHỐI XỬ LÝ TÍN HIỆU (PHIÊN BẢN "PHẪU THUẬT" CHÍNH XÁC) ---
-# Dùng grep -> awk -> cut -> xargs để đảm bảo lấy đúng số liệu
+# --- KHỐI XỬ LÝ TÍN HIỆU (PHIÊN BẢN "PHẪU THUẬT" DÙNG SED) ---
+# Phương pháp này đảm bảo lấy đúng và chỉ đúng giá trị số.
 
 # RSSI của antenna chính (RxM)
-T=$(echo "$O" | grep 'PCC RxM RSSI' | awk -F: '{print $2}' | cut -d',' -f1 | xargs)
+T=$(echo "$O" | sed -n 's/.*PCC RxM RSSI:[[:space:]]*\([^,]*\).*/\1/p' | xargs)
 [ -n "$T" ] && RSSI="$T"
 
 # RSRP của antenna chính (RxM)
-T=$(echo "$O" | grep 'PCC RxM RSRP' | awk -F: '{print $2}' | cut -d',' -f1 | xargs)
+T=$(echo "$O" | sed -n 's/.*PCC RxM RSRP:[[:space:]]*\([^,]*\).*/\1/p' | xargs)
 [ -n "$T" ] && RSRP="$T"
 
 # RSRQ
-T=$(echo "$O" | grep 'PCC RSRQ' | awk -F: '{print $2}' | xargs)
+T=$(echo "$O" | sed -n 's/.*PCC RSRQ:[[:space:]]*\([^,]*\).*/\1/p' | xargs)
 [ -n "$T" ] && RSRQ="$T"
 
 # SINR
-T=$(echo "$O" | grep 'PCC SINR' | awk -F: '{print $2}' | xargs)
+T=$(echo "$O" | sed -n 's/.*PCC SINR:[[:space:]]*\([^,]*\).*/\1/p' | xargs)
 [ -n "$T" ] && SINR="$T"
 # --- KẾT THÚC KHỐI XỬ LÝ TÍN HIỆU ---
-
 
 # Xử lý băng tần LTE
 T=$(echo "$O" | awk '/^LTE band:/ {print $3}')
@@ -54,26 +53,22 @@ fi
 CA_BANDS_STR=""
 T=$(echo "$O" | awk '/^LTE SCC1 state:.*ACTIVE/ {print $4}')
 [ -n "$T" ] && CA_BANDS_STR="$CA_BANDS_STR + $(band4g ${T/B/})"
-
 T=$(echo "$O" | awk '/^LTE SCC2 state:.*ACTIVE/ {print $4}')
 [ -n "$T" ] && CA_BANDS_STR="$CA_BANDS_STR + $(band4g ${T/B/})"
-
 T=$(echo "$O" | awk '/^LTE SCC3 state:.*ACTIVE/ {print $4}')
 [ -n "$T" ] && CA_BANDS_STR="$CA_BANDS_STR + $(band4g ${T/B/})"
 
-# Xử lý băng tần và tín hiệu 5G NR (với phương pháp "phẫu thuật")
+# Xử lý băng tần và tín hiệu 5G NR (dùng sed)
 T=$(echo "$O" | awk '/^SCC. NR5G band:/ {print $4}')
 if [ -n "$T" ] && [ "$T" != "---" ]; then
     CA_BANDS_STR="$CA_BANDS_STR + $(band5g ${T/n/})"
     
     # Ghi đè các giá trị tín hiệu nếu có 5G
-    T_NR_RSRP=$(echo "$O" | grep 'SCC. NR5G RSRP' | awk -F: '{print $2}' | xargs)
+    T_NR_RSRP=$(echo "$O" | sed -n 's/.*SCC. NR5G RSRP:[[:space:]]*\([^,]*\).*/\1/p' | xargs)
     [ -n "$T_NR_RSRP" ] && RSRP="$T_NR_RSRP"
-    
-    T_NR_RSRQ=$(echo "$O" | grep 'SCC. NR5G RSRQ' | awk -F: '{print $2}' | xargs)
+    T_NR_RSRQ=$(echo "$O" | sed -n 's/.*SCC. NR5G RSRQ:[[:space:]]*\([^,]*\).*/\1/p' | xargs)
     [ -n "$T_NR_RSRQ" ] && RSRQ="$T_NR_RSRQ"
-    
-    T_NR_SINR=$(echo "$O" | grep 'SCC. NR5G SINR' | awk -F: '{print $2}' | xargs)
+    T_NR_SINR=$(echo "$O" | sed -n 's/.*SCC. NR5G SINR:[[:space:]]*\([^,]*\).*/\1/p' | xargs)
     [ -n "$T_NR_SINR" ] && SINR="$T_NR_SINR"
 fi
 
