@@ -1,16 +1,21 @@
 # Sierra Wireless EM9190
-# Phiên bản đã được cập nhật và sửa lỗi, bổ sung chi tiết 5G
+# PHIÊN BẢN HOÀN CHỈNH CUỐI CÙNG (Cân bằng Tốc độ & Ổn định)
 
-# Lấy thông tin trạng thái modem
+# --- LẤY DỮ LIỆU PHỨC TẠP: GSTATUS ---
+# Gọi riêng lệnh này để đảm bảo phân tích chính xác 100%
 O=$(sms_tool -d $DEVICE at "at!gstatus?")
 
-# Lấy thông tin Model và Firmware
-MODEL=$(sms_tool -d "$DEVICE" at "AT+CGMM" | sed -n '2p' | tr -d '\r\n')
-FW=$(sms_tool -d "$DEVICE" at "AT+CGMR" | sed -n '2p' | tr -d '\r\n')
+# --- LẤY DỮ LIỆU ĐƠN GIẢN: MODEL & FIRMWARE ---
+# Gộp 2 lệnh đơn giản vào 1 lần gọi để tăng tốc
+INFO=$(sms_tool -d "$DEVICE" at "AT+CGMM;+CGMR")
+MODEL=$(echo "$INFO" | awk -F': ' '/^\+CGMM:/ {print $2}' | tr -d '\r\n')
+FW=$(echo "$INFO" | awk -F': ' '/^\+CGMR:/ {print $2}' | tr -d '\r\n')
+
+# --- BẮT ĐẦU XỬ LÝ DỮ LIỆU ĐÃ LẤY ---
 
 # Xử lý nhiệt độ
-T=$(echo "$O" | awk -F: '/Temperature:/ {print $3}' | tr -d '\r\n' | xargs)
-[ -n "$T" ] && TEMP="$T °C"
+T=$(echo "$O" | awk -F': ' '/^Current Temperature:/ {print $2}' | tr -d '\r\n' | xargs)
+[ -n "$T" ] && TEMP="$T" # Nhiệt độ từ modem đã có đơn vị, không cần thêm "°C"
 
 # Xác định chế độ mạng
 T=$(echo "$O" | awk '/^System mode:/ {print $3}')
@@ -44,77 +49,47 @@ if [ -n "$T" ]; then
     MODE="$MODE $(band4g ${T/B/})"
 fi
 
-# Xử lý SCC1 (Secondary Component Carrier 1)
-T=$(echo "$O" | awk -F: '/^LTE SCC1 state:.*ACTIVE/ {print $3}')
-if [ -n "$T" ]; then
-    T1=$(echo "$O" | awk '/^LTE SCC1 bw/ {print $5}')
-    if [ -n "$T1" ]; then
-        S1BAND="$(band4g ${T/B/}) @${T1} MHz"
-    else
-        S1BAND="$(band4g ${T/B/})"
-    fi
-    MODE="${MODE/LTE/LTE-A} + $(band4g ${T/B/})"
-fi
+# Xử lý băng tần phụ CA
+CA_BANDS_STR=""
+T=$(echo "$O" | awk '/^LTE SCC1 state:.*ACTIVE/ {print $4}') # Sửa lỗi, lấy đúng tên band
+[ -n "$T" ] && CA_BANDS_STR="$CA_BANDS_STR + $(band4g ${T/B/})"
 
-# Xử lý SCC2
-T=$(echo "$O" | awk -F: '/^LTE SCC2 state:.*ACTIVE/ {print $3}')
-if [ -n "$T" ]; then
-    T1=$(echo "$O" | awk '/^LTE SCC2 bw/ {print $5}')
-    if [ -n "$T1" ]; then
-        S2BAND="$(band4g ${T/B/}) @${T1} MHz"
-    else
-        S2BAND="$(band4g ${T/B/})"
-    fi
-    MODE="$MODE + $(band4g ${T/B/})"
-fi
+T=$(echo "$O" | awk '/^LTE SCC2 state:.*ACTIVE/ {print $4}') # Sửa lỗi, lấy đúng tên band
+[ -n "$T" ] && CA_BANDS_STR="$CA_BANDS_STR + $(band4g ${T/B/})"
 
-# Xử lý SCC3
-T=$(echo "$O" | awk -F: '/^LTE SCC3 state:.*ACTIVE/ {print $3}')
-if [ -n "$T" ]; then
-    T1=$(echo "$O" | awk '/^LTE SCC3 bw/ {print $5}')
-    if [ -n "$T1" ]; then
-        S3BAND="$(band4g ${T/B/}) @${T1} MHz"
-    else
-        S3BAND="$(band4g ${T/B/})"
-    fi
-    MODE="$MODE + $(band4g ${T/B/})"
-fi
+T=$(echo "$O" | awk '/^LTE SCC3 state:.*ACTIVE/ {print $4}') # Sửa lỗi, lấy đúng tên band
+[ -n "$T" ] && CA_BANDS_STR="$CA_BANDS_STR + $(band4g ${T/B/})"
 
-# Xử lý băng tần và các thông số tín hiệu 5G NR
+# Xử lý băng tần và tín hiệu 5G NR
 T=$(echo "$O" | awk '/^SCC. NR5G band:/ {print $4}')
 if [ -n "$T" ] && [ "$T" != "---" ]; then
-    # Thêm băng tần 5G vào chế độ hiển thị
-    MODE="$MODE + $(band5g ${T/n/})"
-    T1=$(echo "$O" | awk '/^SCC.*SCC. NR5G bw:/ {print $8}')
+    CA_BANDS_STR="$CA_BANDS_STR + $(band5g ${T/n/})"
     
-    # ---- [PHẦN XỬ LÝ THÔNG TIN 5G ĐÃ ĐƯỢC BỔ SUNG] ----
-    # Lấy các thông số tín hiệu của 5G NR.
-    # Nếu tìm thấy, sẽ GHI ĐÈ lên các giá trị của LTE đã lấy ở trên.
-    # Điều này đảm bảo giao diện luôn hiển thị thông số quan trọng nhất.
-    
-    # Lấy NR5G RSRP (thường ở cột 4)
     T_NR_RSRP=$(echo "$O" | awk '/SCC. NR5G RSRP:/ {print $4}')
     [ -n "$T_NR_RSRP" ] && RSRP="$T_NR_RSRP"
     
-    # Lấy NR5G RSRQ (thường ở cột 4)
     T_NR_RSRQ=$(echo "$O" | awk '/SCC. NR5G RSRQ:/ {print $4}')
     [ -n "$T_NR_RSRQ" ] && RSRQ="$T_NR_RSRQ"
     
-    # Lấy NR5G SINR (thường ở cột 4)
     T_NR_SINR=$(echo "$O" | awk '/SCC. NR5G SINR:/ {print $4}')
     [ -n "$T_NR_SINR" ] && SINR="$T_NR_SINR"
-    
 fi
 
-# Chuẩn hóa chế độ mạng
-MODE=$(echo "$MODE" | sed 's/LTE-A/LTE-A |/' | sed 's/ + / + /g')
+# Nếu có băng tần phụ, cập nhật MODE
+if [ -n "$CA_BANDS_STR" ]; then
+    MODE=${MODE/LTE/LTE-A}
+    MODE="$MODE$CA_BANDS_STR"
+fi
+MODE=$(echo "$MODE" | sed 's/LTE-A/LTE-A |/')
 
-# Xác định giao thức modem (phiên bản ổn định hơn)
+# Xác định giao thức modem
 PROTO_INFO=$(awk '/Vendor=1199 ProdID=90d3/{f=1} f && /Driver=/{print; f=0}' /sys/kernel/debug/usb/devices)
-if [[ "$PROTO_INFO" == *"Driver=qmi_wwan"* ]]; then
-    PROTO="qmi"
-elif [[ "$PROTO_INFO" == *"Driver=cdc_mbim"* ]]; then
-    PROTO="mbim"
-elif [[ "$PROTO_INFO" == *"Driver=cdc_ether"* ]]; then
-    PROTO="ecm"
+if [ -n "$PROTO_INFO" ]; then
+    if echo "$PROTO_INFO" | grep -q "Driver=qmi_wwan"; then
+        PROTO="qmi"
+    elif echo "$PROTO_INFO" | grep -q "Driver=cdc_mbim"; then
+        PROTO="mbim"
+    elif echo "$PROTO_INFO" | grep -q "Driver=cdc_ether"; then
+        PROTO="ecm"
+    fi
 fi
