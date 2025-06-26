@@ -1,7 +1,5 @@
 # Sierra Wireless EM9190
 
-#!/bin/bash
-
 # Lấy thông tin trạng thái modem
 O=$(sms_tool -d $DEVICE at "at!gstatus?")
 
