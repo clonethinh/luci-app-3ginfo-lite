@@ -1,22 +1,16 @@
 # Sierra Wireless EM9190
-# Phiên bản SIÊU TỐI ƯU - Chỉ gọi modem 1 lần duy nhất
+# Phiên bản TỐI ƯU & TƯƠNG THÍCH - Sửa lỗi "declare not found" cho OpenWrt/ash
 
-# --- BƯỚC 1: LẤY TẤT CẢ DỮ LIỆU TRONG MỘT LẦN ---
-# Gộp các lệnh AT vào một chuỗi, cách nhau bởi dấu chấm phẩy
+# --- LẤY TẤT CẢ DỮ LIỆU TRONG MỘT LẦN ---
 ALL_COMMANDS="at!gstatus?;+CGMM;+CGMR"
 O=$(sms_tool -d "$DEVICE" at "$ALL_COMMANDS")
 
-# --- BƯỚC 2: XỬ LÝ (PARSE) DỮ LIỆU ĐÃ LẤY ---
-
-# Dùng một lệnh awk mạnh mẽ để xử lý toàn bộ khối output
-# và gán giá trị cho các biến shell
+# --- XỬ LÝ DỮ LIỆU ĐÃ LẤY ---
+# Dùng awk để trích xuất tất cả các giá trị cần thiết
 eval $(echo "$O" | awk '
-# Bắt đầu xử lý khối !gstatus?
 /^\!GSTATUS:/ { in_gstatus=1; next }
-/^\+CGMM:/ { in_gstatus=0; MODEL=$0; next }
-/^\+CGMR:/ { in_gstatus=0; FW=$0; next }
-
-# Nếu đang trong khối !gstatus?
+/^\+CGMM:/  { gsub(/\r/, ""); print "MODEL=\"" substr($0, 8) "\""; next }
+/^\+CGMR:/  { gsub(/\r/, ""); print "FW=\"" substr($0, 8) "\""; next }
 in_gstatus {
     if (/Temperature:/) { print "TEMP=" $3 }
     if (/^System mode:/) { print "SYS_MODE=\"" $3 "\"" }
@@ -27,11 +21,8 @@ in_gstatus {
     if (/^SINR/) { print "SINR=" $3 }
     if (/^LTE band:/) { print "PCC_BAND=" $3; print "PCC_BW=" $6 }
     if (/^LTE SCC1 state:.*ACTIVE/) { print "SCC1_BAND=" $3 }
-    if (/^LTE SCC1 bw/) { print "SCC1_BW=" $5 }
     if (/^LTE SCC2 state:.*ACTIVE/) { print "SCC2_BAND=" $3 }
-    if (/^LTE SCC2 bw/) { print "SCC2_BW=" $5 }
     if (/^LTE SCC3 state:.*ACTIVE/) { print "SCC3_BAND=" $3 }
-    if (/^LTE SCC3 bw/) { print "SCC3_BW=" $5 }
     if (/^SCC. NR5G band:/ && $4 != "---") { print "NR_BAND=" $4 }
     if (/^SCC.*NR5G RSRP:/) { print "NR_RSRP=" $4 }
     if (/^SCC.*NR5G RSRQ:/) { print "NR_RSRQ=" $4 }
@@ -39,11 +30,7 @@ in_gstatus {
 }
 ')
 
-# --- BƯỚC 3: XÂY DỰNG CÁC BIẾN CUỐI CÙNG ---
-
-# Xử lý Model và Firmware từ kết quả thô
-MODEL=$(echo "$MODEL" | tr -d '\r\n' | cut -d' ' -f2-)
-FW=$(echo "$FW" | tr -d '\r\n' | cut -d' ' -f2-)
+# --- XÂY DỰNG CÁC BIẾN CUỐI CÙNG ---
 
 [ -n "$TEMP" ] && TEMP="$TEMP °C"
 
@@ -61,33 +48,37 @@ fi
 [ -n "$NR_RSRQ" ] && RSRQ=$NR_RSRQ
 [ -n "$NR_SINR" ] && SINR=$NR_SINR
 
-# Xử lý băng tần
-declare -a ca_bands
+# Xử lý băng tần bằng cách ghép chuỗi (thay cho mảng)
+CA_BANDS_STR=""
 if [ -n "$PCC_BAND" ]; then
     band_name=$(band4g "${PCC_BAND/B/}")
     PBAND="$band_name @$PCC_BW MHz"
     MODE="$MODE $band_name"
 fi
 
-[ -n "$SCC1_BAND" ] && ca_bands+=("$(band4g "${SCC1_BAND/B/}")")
-[ -n "$SCC2_BAND" ] && ca_bands+=("$(band4g "${SCC2_BAND/B/}")")
-[ -n "$SCC3_BAND" ] && ca_bands+=("$(band4g "${SCC3_BAND/B/}")")
-[ -n "$NR_BAND" ] && ca_bands+=("$(band5g "${NR_BAND/n/}")")
+# Ghép chuỗi các băng tần phụ (CA)
+[ -n "$SCC1_BAND" ] && CA_BANDS_STR="$CA_BANDS_STR + $(band4g "${SCC1_BAND/B/}")"
+[ -n "$SCC2_BAND" ] && CA_BANDS_STR="$CA_BANDS_STR + $(band4g "${SCC2_BAND/B/}")"
+[ -n "$SCC3_BAND" ] && CA_BANDS_STR="$CA_BANDS_STR + $(band4g "${SCC3_BAND/B/}")"
+[ -n "$NR_BAND" ] && CA_BANDS_STR="$CA_BANDS_STR + $(band5g "${NR_BAND/n/}")"
 
-if [ ${#ca_bands[@]} -gt 0 ]; then
+# Nếu có băng tần phụ, cập nhật MODE
+if [ -n "$CA_BANDS_STR" ]; then
     MODE=${MODE/LTE/LTE-A}
-    ca_string=$(IFS=+; echo "${ca_bands[*]}")
-    MODE="$MODE + $ca_string"
+    MODE="$MODE$CA_BANDS_STR"
 fi
-MODE=${MODE/LTE-A /LTE-A | }
-MODE=${MODE//+/ + } # Thêm khoảng trắng cho đẹp
 
-# Xác định giao thức modem (phiên bản ổn định)
+# Chuẩn hóa lại chuỗi MODE cho đẹp
+MODE=$(echo "$MODE" | sed 's/LTE-A/LTE-A |/')
+
+# Xác định giao thức modem
 PROTO_INFO=$(awk '/Vendor=1199 ProdID=90d3/{f=1} f && /Driver=/{print; f=0}' /sys/kernel/debug/usb/devices)
-if [[ "$PROTO_INFO" == *"Driver=qmi_wwan"* ]]; then
-    PROTO="qmi"
-elif [[ "$PROTO_INFO" == *"Driver=cdc_mbim"* ]]; then
-    PROTO="mbim"
-elif [[ "$PROTO_INFO" == *"Driver=cdc_ether"* ]]; then
-    PROTO="ecm"
+if [ -n "$PROTO_INFO" ]; then
+    if echo "$PROTO_INFO" | grep -q "Driver=qmi_wwan"; then
+        PROTO="qmi"
+    elif echo "$PROTO_INFO" | grep -q "Driver=cdc_mbim"; then
+        PROTO="mbim"
+    elif echo "$PROTO_INFO" | grep -q "Driver=cdc_ether"; then
+        PROTO="ecm"
+    fi
 fi
