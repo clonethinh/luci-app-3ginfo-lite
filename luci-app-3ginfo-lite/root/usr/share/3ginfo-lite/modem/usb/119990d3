@@ -1,99 +1,120 @@
 # Sierra Wireless EM9190
-# Phiên bản HOÀN CHỈNH - Sửa lỗi nhiệt độ, băng tần và model/firmware
+# Phiên bản đã được cập nhật và sửa lỗi, bổ sung chi tiết 5G
 
-# --- GỌI MODEM MỘT LẦN DUY NHẤT ---
-ALL_COMMANDS="at!gstatus?;+CGMM;+CGMR"
-O=$(sms_tool -d "$DEVICE" at "$ALL_COMMANDS")
+# Lấy thông tin trạng thái modem
+O=$(sms_tool -d $DEVICE at "at!gstatus?")
 
-# --- XỬ LÝ DỮ LIỆU BẰNG AWK ĐÃ TINH CHỈNH ---
-eval $(echo "$O" | awk '
-# Xử lý Model. Xóa tiền tố "+CGMM: " và ký tự \r
-/^\+CGMM:/ {
-    gsub(/\+CGMM:[[:space:]]+|\r/, "");
-    print "MODEL=\"" $0 "\"";
-    next;
-}
+# Lấy thông tin Model và Firmware
+MODEL=$(sms_tool -d "$DEVICE" at "AT+CGMM" | sed -n '2p' | tr -d '\r\n')
+FW=$(sms_tool -d "$DEVICE" at "AT+CGMR" | sed -n '2p' | tr -d '\r\n')
 
-# Xử lý Firmware. Xóa tiền tố "+CGMR: " và ký tự \r
-/^\+CGMR:/ {
-    gsub(/\+CGMR:[[:space:]]+|\r/, "");
-    print "FW=\"" $0 "\"";
-    next;
-}
+# Xử lý nhiệt độ
+T=$(echo "$O" | awk -F: '/Temperature:/ {print $3}' | tr -d '\r\n' | xargs)
+[ -n "$T" ] && TEMP="$T °C"
 
-# Xử lý khối dữ liệu từ !gstatus?
-{
-    # Đặt Field Separator (FS) để xử lý nhiều khoảng trắng
-    FS = "[[:space:]]+";
-    $0 = $0; # Rebuild the line with the new FS
-
-    if (/^Current Temperature:/) { print "TEMP=" $3 }
-    if (/^System mode:/) { print "SYS_MODE=\"" $3 "\"" }
-    if (/TAC:/) { print "T_HEX=" $6 }
-    if (/^PCC.*RSSI/) { print "RSSI=" $4 }
-    if (/^PCC.*RSRP/) { print "RSRP=" $8 }
-    if (/^RSRQ/) { print "RSRQ=" $3 }
-    if (/^SINR/) { print "SINR=" $3 }
-    if (/^LTE band:/) { print "PCC_BAND=" $3; print "PCC_BW=" $6 }
-    
-    # Sửa lỗi lấy sai trường. Bây giờ sẽ lấy trường thứ 4 (tên band) thay vì trường 3 (chữ "state:")
-    if (/^LTE SCC1 state:.*ACTIVE/) { print "SCC1_BAND=" $4 }
-    if (/^LTE SCC2 state:.*ACTIVE/) { print "SCC2_BAND=" $4 }
-    if (/^LTE SCC3 state:.*ACTIVE/) { print "SCC3_BAND=" $4 }
-
-    if (/^SCC. NR5G band:/ && $4 != "---") { print "NR_BAND=" $4 }
-    if (/^SCC.*NR5G RSRP:/) { print "NR_RSRP=" $4 }
-    if (/^SCC.*NR5G RSRQ:/) { print "NR_RSRQ=" $4 }
-    if (/^SCC.*NR5G SINR:/) { print "NR_SINR=" $4 }
-}
-')
-
-# --- XÂY DỰNG CÁC BIẾN CUỐI CÙNG ---
-
-[ -n "$TEMP" ] && TEMP="$TEMP °C"
-
-case $SYS_MODE in
+# Xác định chế độ mạng
+T=$(echo "$O" | awk '/^System mode:/ {print $3}')
+case $T in
     "LTE") MODE="LTE" ;;
     "ENDC") MODE="5G NSA" ;;
 esac
 
-if [ -n "$T_HEX" ]; then
-    T_DEC=$(printf "%d" "0x$T_HEX")
+# Xử lý TAC (Tracking Area Code)
+T=$(echo "$O" | awk '/.*TAC:/ {print $6}')
+if [ -n "$T" ]; then
+    T_DEC=$(printf "%d" "0x$T")
+    T_HEX="$T"
 fi
 
-# Ghi đè thông số tín hiệu nếu có 5G
-[ -n "$NR_RSRP" ] && RSRP=$NR_RSRP
-[ -n "$NR_RSRQ" ] && RSRQ=$NR_RSRQ
-[ -n "$NR_SINR" ] && SINR=$NR_SINR
+# Xử lý các thông số tín hiệu chính (mặc định là của LTE)
+T=$(echo "$O" | awk '/^PCC.*RSSI/ {print $4}' | xargs)
+[ -n "$T" ] && RSSI="${T// /}"
+T=$(echo "$O" | awk '/^PCC.*RSRP/ {print $8}' | xargs)
+[ -n "$T" ] && RSRP="${T// /}"
+T=$(echo "$O" | awk '/^RSRQ/ {print $3}')
+[ -n "$T" ] && RSRQ="$T"
+T=$(echo "$O" | awk '/^SINR/ {print $3}')
+[ -n "$T" ] && SINR="$T"
 
-# Xử lý băng tần bằng cách ghép chuỗi
-CA_BANDS_STR=""
-if [ -n "$PCC_BAND" ]; then
-    band_name=$(band4g "${PCC_BAND/B/}")
-    PBAND="$band_name @$PCC_BW MHz"
-    MODE="$MODE $band_name"
+# Xử lý băng tần LTE
+T=$(echo "$O" | awk '/^LTE band:/ {print $3}')
+if [ -n "$T" ]; then
+    T1=$(echo "$O" | awk '/^LTE band:/ {print $6}')
+    PBAND="$(band4g ${T/B/}) @${T1} MHz"
+    MODE="$MODE $(band4g ${T/B/})"
 fi
 
-[ -n "$SCC1_BAND" ] && CA_BANDS_STR="$CA_BANDS_STR + $(band4g "${SCC1_BAND/B/}")"
-[ -n "$SCC2_BAND" ] && CA_BANDS_STR="$CA_BANDS_STR + $(band4g "${SCC2_BAND/B/}")"
-[ -n "$SCC3_BAND" ] && CA_BANDS_STR="$CA_BANDS_STR + $(band4g "${SCC3_BAND/B/}")"
-[ -n "$NR_BAND" ] && CA_BANDS_STR="$CA_BANDS_STR + $(band5g "${NR_BAND/n/}")"
-
-if [ -n "$CA_BANDS_STR" ]; then
-    MODE=${MODE/LTE/LTE-A}
-    MODE="$MODE$CA_BANDS_STR"
-fi
-
-MODE=$(echo "$MODE" | sed 's/LTE-A/LTE-A |/')
-
-# Xác định giao thức modem
-PROTO_INFO=$(awk '/Vendor=1199 ProdID=90d3/{f=1} f && /Driver=/{print; f=0}' /sys/kernel/debug/usb/devices)
-if [ -n "$PROTO_INFO" ]; then
-    if echo "$PROTO_INFO" | grep -q "Driver=qmi_wwan"; then
-        PROTO="qmi"
-    elif echo "$PROTO_INFO" | grep -q "Driver=cdc_mbim"; then
-        PROTO="mbim"
-    elif echo "$PROTO_INFO" | grep -q "Driver=cdc_ether"; then
-        PROTO="ecm"
+# Xử lý SCC1 (Secondary Component Carrier 1)
+T=$(echo "$O" | awk -F: '/^LTE SCC1 state:.*ACTIVE/ {print $3}')
+if [ -n "$T" ]; then
+    T1=$(echo "$O" | awk '/^LTE SCC1 bw/ {print $5}')
+    if [ -n "$T1" ]; then
+        S1BAND="$(band4g ${T/B/}) @${T1} MHz"
+    else
+        S1BAND="$(band4g ${T/B/})"
     fi
+    MODE="${MODE/LTE/LTE-A} + $(band4g ${T/B/})"
+fi
+
+# Xử lý SCC2
+T=$(echo "$O" | awk -F: '/^LTE SCC2 state:.*ACTIVE/ {print $3}')
+if [ -n "$T" ]; then
+    T1=$(echo "$O" | awk '/^LTE SCC2 bw/ {print $5}')
+    if [ -n "$T1" ]; then
+        S2BAND="$(band4g ${T/B/}) @${T1} MHz"
+    else
+        S2BAND="$(band4g ${T/B/})"
+    fi
+    MODE="$MODE + $(band4g ${T/B/})"
+fi
+
+# Xử lý SCC3
+T=$(echo "$O" | awk -F: '/^LTE SCC3 state:.*ACTIVE/ {print $3}')
+if [ -n "$T" ]; then
+    T1=$(echo "$O" | awk '/^LTE SCC3 bw/ {print $5}')
+    if [ -n "$T1" ]; then
+        S3BAND="$(band4g ${T/B/}) @${T1} MHz"
+    else
+        S3BAND="$(band4g ${T/B/})"
+    fi
+    MODE="$MODE + $(band4g ${T/B/})"
+fi
+
+# Xử lý băng tần và các thông số tín hiệu 5G NR
+T=$(echo "$O" | awk '/^SCC. NR5G band:/ {print $4}')
+if [ -n "$T" ] && [ "$T" != "---" ]; then
+    # Thêm băng tần 5G vào chế độ hiển thị
+    MODE="$MODE + $(band5g ${T/n/})"
+    T1=$(echo "$O" | awk '/^SCC.*SCC. NR5G bw:/ {print $8}')
+    
+    # ---- [PHẦN XỬ LÝ THÔNG TIN 5G ĐÃ ĐƯỢC BỔ SUNG] ----
+    # Lấy các thông số tín hiệu của 5G NR.
+    # Nếu tìm thấy, sẽ GHI ĐÈ lên các giá trị của LTE đã lấy ở trên.
+    # Điều này đảm bảo giao diện luôn hiển thị thông số quan trọng nhất.
+    
+    # Lấy NR5G RSRP (thường ở cột 4)
+    T_NR_RSRP=$(echo "$O" | awk '/SCC. NR5G RSRP:/ {print $4}')
+    [ -n "$T_NR_RSRP" ] && RSRP="$T_NR_RSRP"
+    
+    # Lấy NR5G RSRQ (thường ở cột 4)
+    T_NR_RSRQ=$(echo "$O" | awk '/SCC. NR5G RSRQ:/ {print $4}')
+    [ -n "$T_NR_RSRQ" ] && RSRQ="$T_NR_RSRQ"
+    
+    # Lấy NR5G SINR (thường ở cột 4)
+    T_NR_SINR=$(echo "$O" | awk '/SCC. NR5G SINR:/ {print $4}')
+    [ -n "$T_NR_SINR" ] && SINR="$T_NR_SINR"
+    
+fi
+
+# Chuẩn hóa chế độ mạng
+MODE=$(echo "$MODE" | sed 's/LTE-A/LTE-A |/' | sed 's/ + / + /g')
+
+# Xác định giao thức modem (phiên bản ổn định hơn)
+PROTO_INFO=$(awk '/Vendor=1199 ProdID=90d3/{f=1} f && /Driver=/{print; f=0}' /sys/kernel/debug/usb/devices)
+if [[ "$PROTO_INFO" == *"Driver=qmi_wwan"* ]]; then
+    PROTO="qmi"
+elif [[ "$PROTO_INFO" == *"Driver=cdc_mbim"* ]]; then
+    PROTO="mbim"
+elif [[ "$PROTO_INFO" == *"Driver=cdc_ether"* ]]; then
+    PROTO="ecm"
 fi
